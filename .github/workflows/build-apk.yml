@@ -1,0 +1,76 @@
+name: Build Mahi APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unzip project
+        run: unzip -o mahi-android-ready.zip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install dependencies
+        working-directory: mahi
+        run: npm install
+
+      - name: Write .env with API key
+        working-directory: mahi
+        run: echo "VITE_GEMINI_API_KEY=${{ secrets.VITE_GEMINI_API_KEY }}" > .env
+
+      - name: Build web app
+        working-directory: mahi
+        run: npm run build
+
+      - name: Add Android platform
+        working-directory: mahi
+        run: npx cap add android
+
+      - name: Apply mic-permission MainActivity override
+        working-directory: mahi
+        run: |
+          mkdir -p android/app/src/main/java/com/mahi/assistant
+          cp capacitor-android-overrides/MainActivity.java android/app/src/main/java/com/mahi/assistant/MainActivity.java
+
+      - name: Add RECORD_AUDIO permission to manifest
+        working-directory: mahi
+        run: |
+          MANIFEST=android/app/src/main/AndroidManifest.xml
+          if ! grep -q "RECORD_AUDIO" "$MANIFEST"; then
+            sed -i 's#<application#<uses-permission android:name="android.permission.RECORD_AUDIO" />\n\n    <application#' "$MANIFEST"
+          fi
+
+      - name: Generate icons and splash screen
+        working-directory: mahi
+        run: npx @capacitor/assets generate --android
+
+      - name: Sync Capacitor
+        working-directory: mahi
+        run: npx cap sync android
+
+      - name: Make gradlew executable
+        working-directory: mahi
+        run: chmod +x android/gradlew
+
+      - name: Build debug APK
+        working-directory: mahi/android
+        run: ./gradlew assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: mahi-debug-apk
+          path: mahi/android/app/build/outputs/apk/debug/app-debug.apk
